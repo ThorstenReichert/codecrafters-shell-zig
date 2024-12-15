@@ -20,6 +20,6 @@ pub fn main() !void {
 
     // TODO: Handle user input
     if (user_input) |command| {
-        try stdout.print("{s}: command not found", .{command});
+        try stdout.print("{s}: command not found\n", .{command});
     }
 }
