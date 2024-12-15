@@ -1,17 +1,25 @@
 const std = @import("std");
 
-pub fn main() !void {
-    // Uncomment this block to pass the first stage
-    // const stdout = std.io.getStdOut().writer();
-    // try stdout.print("$ ", .{});
+fn nextCommand(reader: anytype, buffer: []u8) !?[]const u8 {
+    const line = (try reader.readUntilDelimiterOrEof(buffer, '\n')) orelse return null;
 
+    if (@import("builtin").os.tag == .windows) {
+        return std.mem.trimRight(u8, line, "\r");
+    } else {
+        return line;
+    }
+}
+
+pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     try stdout.print("$ ", .{});
 
     const stdin = std.io.getStdIn().reader();
     var buffer: [1024]u8 = undefined;
-    const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
+    const user_input = try nextCommand(stdin, &buffer);
 
     // TODO: Handle user input
-    _ = user_input;
+    if (user_input) |command| {
+        try stdout.print("{s}: command not found", .{command});
+    }
 }
