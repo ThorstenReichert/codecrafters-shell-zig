@@ -12,14 +12,19 @@ fn nextCommand(reader: anytype, buffer: []u8) !?[]const u8 {
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
-    try stdout.print("$ ", .{});
-
     const stdin = std.io.getStdIn().reader();
-    var buffer: [1024]u8 = undefined;
-    const user_input = try nextCommand(stdin, &buffer);
 
-    // TODO: Handle user input
-    if (user_input) |command| {
-        try stdout.print("{s}: command not found\n", .{command});
+    var buffer: [1024]u8 = undefined;
+
+    while (true) {
+        try stdout.print("$ ", .{});
+
+        @memset(&buffer, 0);
+        const user_input = try nextCommand(stdin, &buffer);
+
+        // TODO: Handle user input
+        if (user_input) |command| {
+            try stdout.print("{s}: command not found\n", .{command});
+        }
     }
 }
