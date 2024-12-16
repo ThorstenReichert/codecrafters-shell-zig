@@ -4,6 +4,7 @@ const expect = std.testing.expect;
 
 const Result = union(enum) { exit: u8, cont };
 const SplitResult = struct { []const u8, []const u8 };
+const CommandType = enum { exit, echo, type, unknown };
 
 fn splitAtNext(text: []const u8, separator: []const u8) SplitResult {
     const separator_index = mem.indexOf(u8, text, separator);
@@ -51,20 +52,62 @@ fn nextCommand(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
+fn parseCommandType(command_name: []const u8) CommandType {
+    if (mem.eql(u8, command_name, "exit")) {
+        return .exit;
+    } else if (mem.eql(u8, command_name, "echo")) {
+        return .echo;
+    } else if (mem.eql(u8, command_name, "type")) {
+        return .type;
+    } else {
+        return .unknown;
+    }
+}
+
+fn handleExitCommand(args: []const u8) !Result {
+    const code_text, _ = splitAtNext(args, " ");
+    const code = try std.fmt.parseInt(u8, code_text, 10);
+
+    return Result{ .exit = code };
+}
+
+fn handleEchoCommand(writer: anytype, args: []const u8) !Result {
+    try writer.print("{s}\n", .{args});
+
+    return Result{ .cont = {} };
+}
+
+fn handleTypeCommand(writer: anytype, args: []const u8) !Result {
+    const type_text, _ = splitAtNext(args, " ");
+    const command_type = parseCommandType(type_text);
+
+    const builtin = "{s} is a shell builtin\n";
+    const not_found = "{s}: not found\n";
+    switch (command_type) {
+        .exit => try writer.print(builtin, .{"exit"}),
+        .echo => try writer.print(builtin, .{"echo"}),
+        .type => try writer.print(builtin, .{"type"}),
+        .unknown => try writer.print(not_found, .{type_text}),
+    }
+
+    return Result{ .cont = {} };
+}
+
+fn handleUnknownCommand(writer: anytype, name: []const u8) !Result {
+    try writer.print("{s}: command not found\n", .{name});
+    return Result{ .cont = {} };
+}
+
 fn handleCommand(writer: anytype, command: []const u8) !Result {
     const command_name, const args = splitAtNext((command), " ");
+    const command_type = parseCommandType(command_name);
 
-    if (mem.eql(u8, command_name, "exit")) {
-        const code_text, _ = splitAtNext(args, " ");
-        const code = try std.fmt.parseInt(u8, code_text, 10);
-        return Result{ .exit = code };
-    } else if (mem.eql(u8, command_name, "echo")) {
-        try writer.print("{s}\n", .{args});
-        return Result{ .cont = {} };
-    } else {
-        try writer.print("{s}: command not found\n", .{command});
-        return Result{ .cont = {} };
-    }
+    return switch (command_type) {
+        .exit => handleExitCommand(args),
+        .echo => handleEchoCommand(writer, args),
+        .type => handleTypeCommand(writer, args),
+        .unknown => handleUnknownCommand(writer, command_name),
+    };
 }
 
 test "parse int" {
