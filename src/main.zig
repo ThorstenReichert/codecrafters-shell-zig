@@ -4,10 +4,7 @@ const expect = std.testing.expect;
 
 const debug = true;
 
-const Pal = if (@import("builtin").os.tag == .windows)
-    .{ .path_separator = ";", .dir_separator = "\\", .trim_cr = true }
-else
-    .{ .path_separator = ":", .dir_separator = "/", .trim_cr = false };
+const Pal = @import("pal.zig").Current;
 
 const Result = union(enum) { exit: u8, cont };
 const SplitResult = struct { []const u8, []const u8 };
