@@ -145,7 +145,12 @@ fn handlePwdCommand(ctx: Context) !Result {
 }
 
 fn handleCdCommand(ctx: Context, args: []const u8) !Result {
-    const dir = std.fs.cwd().openDir(args, .{}) catch {
+    const dir_path = if (mem.eql(u8, args, "~"))
+        ctx.env_map.get("HOME") orelse ""
+    else
+        args;
+
+    const dir = std.fs.cwd().openDir(dir_path, .{}) catch {
         try ctx.writer.print("cd: {s}: No such file or directory\n", .{args});
         return Result.cont();
     };
