@@ -145,18 +145,13 @@ fn handlePwdCommand(ctx: Context) !Result {
 }
 
 fn handleCdCommand(ctx: Context, args: []const u8) !Result {
-    if (mem.startsWith(u8, args, Pal.absolute_path_prefix)) {
-        const dir = std.fs.cwd().openDir(args, .{}) catch {
-            try ctx.writer.print("cd: {s}: No such file or directory\n", .{args});
-            return Result.cont();
-        };
+    const dir = std.fs.cwd().openDir(args, .{}) catch {
+        try ctx.writer.print("cd: {s}: No such file or directory\n", .{args});
+        return Result.cont();
+    };
 
-        try dir.setAsCwd();
-        return Result.cont();
-    } else {
-        try ctx.writer.print("cd: {s} invalid path\n", .{args});
-        return Result.cont();
-    }
+    try dir.setAsCwd();
+    return Result.cont();
 }
 
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
