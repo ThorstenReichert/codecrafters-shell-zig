@@ -147,7 +147,7 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
 }
 
 fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
-    const run_prefix = "./";
+    const run_prefix = "";
 
     if (!mem.startsWith(u8, input, run_prefix)) {
         return null;
