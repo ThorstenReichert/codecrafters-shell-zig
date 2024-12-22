@@ -31,7 +31,7 @@ const Context = struct {
     writer: std.fs.File.Writer,
 };
 
-const BuiltinSymbolKind = enum { exit, echo, type };
+const BuiltinSymbolKind = enum { exit, echo, type, pwd };
 const BuiltinSymbol = struct { name: []const u8, kind: BuiltinSymbolKind };
 const FileSymbol = struct { name: []const u8, path: []const u8 };
 const UnknownSymbol = struct { name: []const u8 };
@@ -65,6 +65,8 @@ fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
         return BuiltinSymbol{ .name = symbol_name, .kind = .echo };
     } else if (mem.eql(u8, symbol_name, "type")) {
         return BuiltinSymbol{ .name = symbol_name, .kind = .type };
+    } else if (mem.eql(u8, symbol_name, "pwd")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .pwd };
     } else {
         return null;
     }
@@ -132,6 +134,14 @@ fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
     return Result.cont();
 }
 
+fn handlePwdCommand(ctx: Context) !Result {
+    const cwd = try std.fs.cwd().realpathAlloc(ctx.allocator, ".");
+
+    try ctx.writer.print("{s}\n", .{cwd});
+
+    return Result.cont();
+}
+
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     const cmd, const args = util.splitAtNext(input, " ");
 
@@ -140,6 +150,7 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
             .exit => try handleExitCommand(args),
             .echo => try handleEchoCommand(ctx, args),
             .type => try handleTypeCommand(ctx, args),
+            .pwd => try handlePwdCommand(ctx),
         };
     } else {
         return null;
