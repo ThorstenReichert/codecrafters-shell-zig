@@ -15,22 +15,10 @@ fn trace(comptime format: []const u8, args: anytype) void {
 }
 
 const Result = union(enum) { exit: u8, cont };
-const CommandType = enum { exit, echo, type, exec, unknown };
 const Context = struct {
     allocator: std.mem.Allocator,
     env_map: std.process.EnvMap,
     writer: std.fs.File.Writer,
-};
-const ExecCommand = struct {
-    name: []const u8,
-    path: []const u8,
-};
-const Command = union(CommandType) {
-    exit,
-    echo,
-    type,
-    exec: ExecCommand,
-    unknown,
 };
 
 const BuiltinSymbolKind = enum { exit, echo, type };
@@ -44,7 +32,7 @@ const Symbol = union(SymbolType) {
     unknown: UnknownSymbol,
 };
 
-fn nextCommand(reader: anytype, buffer: []u8) ?[]const u8 {
+fn nextInput(reader: anytype, buffer: []u8) ?[]const u8 {
     const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch {
         return null;
     };
@@ -105,20 +93,6 @@ fn resolveSymbol(ctx: Context, symbol_name: []const u8) Symbol {
     }
 }
 
-fn resolveCommand(ctx: Context, command_name: []const u8) Command {
-    _ = ctx;
-
-    if (mem.eql(u8, command_name, "exit")) {
-        return .exit;
-    } else if (mem.eql(u8, command_name, "echo")) {
-        return .echo;
-    } else if (mem.eql(u8, command_name, "type")) {
-        return .type;
-    } else {
-        return .unknown;
-    }
-}
-
 fn handleExitCommand(args: []const u8) !Result {
     const code_text, _ = util.splitAtNext(args, " ");
     const code = try std.fmt.parseInt(u8, code_text, 10);
@@ -148,30 +122,33 @@ fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
     return Result{ .cont = {} };
 }
 
-fn handleExecCommand(ctx: Context, cmd: ExecCommand, args: []const u8) !Result {
-    _ = ctx;
-    _ = cmd;
-    _ = args;
+fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
+    const cmd, const args = util.splitAtNext(input, " ");
 
+    if (resolveBuiltinSymbol(cmd)) |builtin| {
+        return switch (builtin.kind) {
+            .exit => try handleExitCommand(args),
+            .echo => try handleEchoCommand(ctx, args),
+            .type => try handleTypeCommand(ctx, args),
+        };
+    } else {
+        return null;
+    }
+}
+
+fn handleUnknown(ctx: Context, input: []const u8) !Result {
+    const cmd, _ = util.splitAtNext(input, " ");
+
+    try ctx.writer.print("{s}: command not found\n", .{cmd});
     return Result{ .cont = {} };
 }
 
-fn handleUnknownCommand(ctx: Context, name: []const u8) !Result {
-    try ctx.writer.print("{s}: command not found\n", .{name});
-    return Result{ .cont = {} };
-}
-
-fn handleCommand(ctx: Context, command: []const u8) !Result {
-    const command_name, const args = util.splitAtNext((command), " ");
-    const command_type = resolveCommand(ctx, command_name);
-
-    return switch (command_type) {
-        .exit => handleExitCommand(args),
-        .echo => handleEchoCommand(ctx, args),
-        .type => handleTypeCommand(ctx, args),
-        .exec => |process| handleExecCommand(ctx, process, args),
-        .unknown => handleUnknownCommand(ctx, command_name),
-    };
+fn handleInput(ctx: Context, input: []const u8) !Result {
+    if (try tryHandleBuiltin(ctx, input)) |result| {
+        return result;
+    } else {
+        return try handleUnknown(ctx, input);
+    }
 }
 
 pub fn main() !u8 {
@@ -191,11 +168,11 @@ pub fn main() !u8 {
         try stdout.print("$ ", .{});
 
         @memset(&buffer, 0);
-        const user_input = nextCommand(stdin, &buffer);
+        const user_input = nextInput(stdin, &buffer);
 
         // TODO: Handle user input
         if (user_input) |command| {
-            const result = try handleCommand(ctx, command);
+            const result = try handleInput(ctx, command);
 
             switch (result) {
                 .cont => {},
