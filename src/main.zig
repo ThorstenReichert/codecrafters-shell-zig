@@ -14,7 +14,17 @@ fn trace(comptime format: []const u8, args: anytype) void {
     }
 }
 
-const Result = union(enum) { exit: u8, cont };
+const Result = union(enum) {
+    exit: u8,
+    cont,
+
+    pub fn cont() Result {
+        return Result{ .cont = {} };
+    }
+    pub fn exit(code: u8) Result {
+        return Result{ .exit = code };
+    }
+};
 const Context = struct {
     allocator: std.mem.Allocator,
     env_map: std.process.EnvMap,
@@ -97,13 +107,13 @@ fn handleExitCommand(args: []const u8) !Result {
     const code_text, _ = util.splitAtNext(args, " ");
     const code = try std.fmt.parseInt(u8, code_text, 10);
 
-    return Result{ .exit = code };
+    return Result.exit(code);
 }
 
 fn handleEchoCommand(ctx: Context, args: []const u8) !Result {
     try ctx.writer.print("{s}\n", .{args});
 
-    return Result{ .cont = {} };
+    return Result.cont();
 }
 
 fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
@@ -119,7 +129,7 @@ fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
         .unknown => try ctx.writer.print(not_found, .{type_text}),
     }
 
-    return Result{ .cont = {} };
+    return Result.cont();
 }
 
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
@@ -136,15 +146,42 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     }
 }
 
+fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
+    const run_prefix = "./";
+
+    if (!mem.startsWith(u8, input, run_prefix)) {
+        return null;
+    }
+
+    const cmd, const args = util.splitAtNext(input, " ");
+    const process_name = cmd[run_prefix.len..];
+
+    if (resolveFileSymbol(ctx, process_name)) |file| {
+        const argv = [_][]const u8{ file.path, args };
+        var proc = std.process.Child.init(&argv, ctx.allocator);
+
+        const term = try proc.spawnAndWait();
+
+        return switch (term) {
+            .Exited => |code| if (code == 0) Result.cont() else Result.exit(1),
+            else => Result.exit(1),
+        };
+    } else {
+        return null;
+    }
+}
+
 fn handleUnknown(ctx: Context, input: []const u8) !Result {
     const cmd, _ = util.splitAtNext(input, " ");
 
     try ctx.writer.print("{s}: command not found\n", .{cmd});
-    return Result{ .cont = {} };
+    return Result.cont();
 }
 
 fn handleInput(ctx: Context, input: []const u8) !Result {
     if (try tryHandleBuiltin(ctx, input)) |result| {
+        return result;
+    } else if (try tryHandleRunProcess(ctx, input)) |result| {
         return result;
     } else {
         return try handleUnknown(ctx, input);
