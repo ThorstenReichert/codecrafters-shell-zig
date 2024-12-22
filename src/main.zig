@@ -193,12 +193,16 @@ pub fn main() !u8 {
     const stdin = std.io.getStdIn().reader();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
+    defer {
+        const deinit_status = gpa.deinit();
+        //fail test; can't try in defer as defer is executed after we return
+        if (deinit_status == .leak) std.testing.expect(false) catch @panic("TEST FAIL");
+    }
 
-    const env_map = try std.process.getEnvMap(arena.allocator());
-    const ctx = Context{ .allocator = arena.allocator(), .env_map = env_map, .writer = stdout };
+    var env_map = try std.process.getEnvMap(gpa.allocator());
+    defer env_map.deinit();
 
+    var ctx = Context{ .allocator = gpa.allocator(), .env_map = env_map, .writer = stdout };
     var buffer: [1024]u8 = undefined;
 
     while (true) {
@@ -207,8 +211,12 @@ pub fn main() !u8 {
         @memset(&buffer, 0);
         const user_input = nextInput(stdin, &buffer);
 
-        // TODO: Handle user input
         if (user_input) |command| {
+            var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+            defer arena.deinit();
+
+            ctx.allocator = arena.allocator();
+
             const result = try handleInput(ctx, command);
 
             switch (result) {
