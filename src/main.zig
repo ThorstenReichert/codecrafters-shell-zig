@@ -12,7 +12,7 @@ else
 const Result = union(enum) { exit: u8, cont };
 const SplitResult = struct { []const u8, []const u8 };
 const CommandType = enum { exit, echo, type, exec, unknown };
-const CommandContext = struct {
+const Context = struct {
     allocator: std.mem.Allocator,
     env_map: std.process.EnvMap,
     writer: std.fs.File.Writer,
@@ -27,6 +27,17 @@ const Command = union(CommandType) {
     type,
     exec: ExecCommand,
     unknown,
+};
+
+const BuiltinSymbolKind = enum { exit, echo, type };
+const BuiltinSymbol = struct { name: []const u8, kind: BuiltinSymbolKind };
+const FileSymbol = struct { name: []const u8, path: []const u8 };
+const UnknownSymbol = struct { name: []const u8 };
+const SymbolType = enum { builtin, file, unknown };
+const Symbol = union(SymbolType) {
+    builtin: BuiltinSymbol,
+    file: FileSymbol,
+    unknown: UnknownSymbol,
 };
 
 fn trace(comptime format: []const u8, args: anytype) void {
@@ -84,6 +95,14 @@ fn join(allocator: mem.Allocator, parts: []const []const u8) []u8 {
     return result;
 }
 
+fn join_path(allocator: mem.Allocator, path1: []const u8, path2: []const u8) []u8 {
+    const left = mem.trimRight(u8, path1, Pal.dir_separator);
+    const separator = Pal.dir_separator;
+    const right = path2;
+
+    return join(allocator, &[_]([]const u8){ left, separator, right });
+}
+
 fn nextCommand(reader: anytype, buffer: []u8) ?[]const u8 {
     const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch {
         return null;
@@ -100,7 +119,54 @@ fn nextCommand(reader: anytype, buffer: []u8) ?[]const u8 {
     }
 }
 
-fn resolveCommand(ctx: CommandContext, command_name: []const u8) Command {
+fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
+    if (mem.eql(u8, symbol_name, "exit")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .exit };
+    } else if (mem.eql(u8, symbol_name, "echo")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .echo };
+    } else if (mem.eql(u8, symbol_name, "type")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .type };
+    } else {
+        return null;
+    }
+}
+
+fn resolveFileSymbol(ctx: Context, symbol_name: []const u8) ?FileSymbol {
+    const path = ctx.env_map.get("PATH") orelse "";
+    const cwd = std.fs.cwd();
+
+    var search_dirs = std.mem.split(u8, path, Pal.path_separator);
+    while (search_dirs.next()) |dir_path| {
+        const dir = cwd.openDir(dir_path, .{ .iterate = true }) catch continue;
+
+        var files = dir.iterate();
+        while (files.next() catch null) |entry| {
+            if (@as(?std.fs.Dir.Entry, entry)) |file| {
+                if (mem.eql(u8, file.name, symbol_name)) {
+                    const program_path = join_path(ctx.allocator, dir_path, symbol_name);
+
+                    return FileSymbol{ .name = symbol_name, .path = program_path };
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+fn resolveSymbol(ctx: Context, symbol_name: []const u8) Symbol {
+    if (resolveBuiltinSymbol(symbol_name)) |builtin| {
+        return Symbol{ .builtin = builtin };
+    } else if (resolveFileSymbol(ctx, symbol_name)) |file| {
+        return Symbol{ .file = file };
+    } else {
+        return Symbol{ .unknown = UnknownSymbol{ .name = symbol_name } };
+    }
+}
+
+fn resolveCommand(ctx: Context, command_name: []const u8) Command {
+    _ = ctx;
+
     if (mem.eql(u8, command_name, "exit")) {
         return .exit;
     } else if (mem.eql(u8, command_name, "echo")) {
@@ -108,25 +174,6 @@ fn resolveCommand(ctx: CommandContext, command_name: []const u8) Command {
     } else if (mem.eql(u8, command_name, "type")) {
         return .type;
     } else {
-        const path = ctx.env_map.get("PATH") orelse "";
-        const cwd = std.fs.cwd();
-
-        var search_dirs = std.mem.split(u8, path, Pal.path_separator);
-        while (search_dirs.next()) |dir_path| {
-            const dir = cwd.openDir(dir_path, .{ .iterate = true }) catch continue;
-
-            var files = dir.iterate();
-            while (files.next() catch null) |entry| {
-                if (@as(?std.fs.Dir.Entry, entry)) |file| {
-                    if (mem.eql(u8, file.name, command_name)) {
-                        const program_path = join(ctx.allocator, &[_]([]const u8){ mem.trimRight(u8, dir_path, Pal.dir_separator), Pal.dir_separator, command_name });
-
-                        return Command{ .exec = ExecCommand{ .name = command_name, .path = program_path } };
-                    }
-                }
-            }
-        }
-
         return .unknown;
     }
 }
@@ -138,31 +185,29 @@ fn handleExitCommand(args: []const u8) !Result {
     return Result{ .exit = code };
 }
 
-fn handleEchoCommand(ctx: CommandContext, args: []const u8) !Result {
+fn handleEchoCommand(ctx: Context, args: []const u8) !Result {
     try ctx.writer.print("{s}\n", .{args});
 
     return Result{ .cont = {} };
 }
 
-fn handleTypeCommand(ctx: CommandContext, args: []const u8) !Result {
+fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
     const type_text, _ = splitAtNext(args, " ");
-    const command_type = resolveCommand(ctx, type_text);
+    const symbol = resolveSymbol(ctx, type_text);
 
     const builtin = "{s} is a shell builtin\n";
     const is_program = "{s} is {s}\n";
     const not_found = "{s}: not found\n";
-    switch (command_type) {
-        .exit => try ctx.writer.print(builtin, .{"exit"}),
-        .echo => try ctx.writer.print(builtin, .{"echo"}),
-        .type => try ctx.writer.print(builtin, .{"type"}),
-        .exec => |exec_cmd| try ctx.writer.print(is_program, .{ exec_cmd.name, exec_cmd.path }),
+    switch (symbol) {
+        .builtin => |builtin_symbol| try ctx.writer.print(builtin, .{builtin_symbol.name}),
+        .file => |file_symbol| try ctx.writer.print(is_program, .{ file_symbol.name, file_symbol.path }),
         .unknown => try ctx.writer.print(not_found, .{type_text}),
     }
 
     return Result{ .cont = {} };
 }
 
-fn handleExecCommand(ctx: CommandContext, cmd: ExecCommand, args: []const u8) !Result {
+fn handleExecCommand(ctx: Context, cmd: ExecCommand, args: []const u8) !Result {
     _ = ctx;
     _ = cmd;
     _ = args;
@@ -170,12 +215,12 @@ fn handleExecCommand(ctx: CommandContext, cmd: ExecCommand, args: []const u8) !R
     return Result{ .cont = {} };
 }
 
-fn handleUnknownCommand(ctx: CommandContext, name: []const u8) !Result {
+fn handleUnknownCommand(ctx: Context, name: []const u8) !Result {
     try ctx.writer.print("{s}: command not found\n", .{name});
     return Result{ .cont = {} };
 }
 
-fn handleCommand(ctx: CommandContext, command: []const u8) !Result {
+fn handleCommand(ctx: Context, command: []const u8) !Result {
     const command_name, const args = splitAtNext((command), " ");
     const command_type = resolveCommand(ctx, command_name);
 
@@ -204,7 +249,7 @@ pub fn main() !u8 {
     defer arena.deinit();
 
     const env_map = try std.process.getEnvMap(arena.allocator());
-    const ctx = CommandContext{ .allocator = arena.allocator(), .env_map = env_map, .writer = stdout };
+    const ctx = Context{ .allocator = arena.allocator(), .env_map = env_map, .writer = stdout };
 
     var buffer: [1024]u8 = undefined;
 
