@@ -31,7 +31,7 @@ const Context = struct {
     writer: std.fs.File.Writer,
 };
 
-const BuiltinSymbolKind = enum { exit, echo, type, pwd };
+const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd };
 const BuiltinSymbol = struct { name: []const u8, kind: BuiltinSymbolKind };
 const FileSymbol = struct { name: []const u8, path: []const u8 };
 const UnknownSymbol = struct { name: []const u8 };
@@ -67,6 +67,8 @@ fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
         return BuiltinSymbol{ .name = symbol_name, .kind = .type };
     } else if (mem.eql(u8, symbol_name, "pwd")) {
         return BuiltinSymbol{ .name = symbol_name, .kind = .pwd };
+    } else if (mem.eql(u8, symbol_name, "cd")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .cd };
     } else {
         return null;
     }
@@ -142,6 +144,21 @@ fn handlePwdCommand(ctx: Context) !Result {
     return Result.cont();
 }
 
+fn handleCdCommand(ctx: Context, args: []const u8) !Result {
+    if (mem.startsWith(u8, args, Pal.absolute_path_prefix)) {
+        const dir = std.fs.cwd().openDir(args, .{}) catch {
+            try ctx.writer.print("cd: {s}: No such file or directory\n", .{args});
+            return Result.cont();
+        };
+
+        try dir.setAsCwd();
+        return Result.cont();
+    } else {
+        try ctx.writer.print("cd: {s} invalid path\n", .{args});
+        return Result.cont();
+    }
+}
+
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     const cmd, const args = util.splitAtNext(input, " ");
 
@@ -151,6 +168,7 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
             .echo => try handleEchoCommand(ctx, args),
             .type => try handleTypeCommand(ctx, args),
             .pwd => try handlePwdCommand(ctx),
+            .cd => try handleCdCommand(ctx, args),
         };
     } else {
         return null;
