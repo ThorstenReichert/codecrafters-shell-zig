@@ -75,7 +75,7 @@ pub const TokenIterator = struct {
             }
 
             const token = text[start..i];
-            self.rest = text[(i + 1)..];
+            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
 
             return token;
         }
@@ -111,6 +111,14 @@ test "tokenize with single quotes" {
     try expect(mem.eql(u8, "/tmp/file name", iter.next().?));
     try expect(mem.eql(u8, "/tmp/file name with spaces", iter.next().?));
     try expect(iter.next() == null);
+}
+
+test "tokenize with mixed quotation" {
+    var iter = tokenize("cat 'test1.txt' test2.txt");
+
+    try expect(mem.eql(u8, "cat", iter.next().?));
+    try expect(mem.eql(u8, "test1.txt", iter.next().?));
+    try expect(mem.eql(u8, "test2.txt", iter.next().?));
 }
 
 pub fn join(allocator: mem.Allocator, parts: []const []const u8) []u8 {

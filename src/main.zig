@@ -31,7 +31,7 @@ const Context = struct {
     writer: std.fs.File.Writer,
 };
 
-const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd };
+const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd, cat };
 const BuiltinSymbol = struct { name: []const u8, kind: BuiltinSymbolKind };
 const FileSymbol = struct { name: []const u8, path: []const u8 };
 const UnknownSymbol = struct { name: []const u8 };
@@ -69,6 +69,8 @@ fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
         return BuiltinSymbol{ .name = symbol_name, .kind = .pwd };
     } else if (mem.eql(u8, symbol_name, "cd")) {
         return BuiltinSymbol{ .name = symbol_name, .kind = .cd };
+    } else if (mem.eql(u8, symbol_name, "cat")) {
+        return BuiltinSymbol{ .name = symbol_name, .kind = .cat };
     } else {
         return null;
     }
@@ -169,6 +171,33 @@ fn handleCdCommand(ctx: Context, args: []const u8) !Result {
     return Result.cont();
 }
 
+fn handleCatCommand(ctx: Context, args: []const u8) !Result {
+    var file_iter = util.tokenize(args);
+    var buffer: [1024]u8 = undefined;
+
+    while (file_iter.next()) |path| {
+        var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+        defer file.close();
+
+        var reader = file.reader();
+        var bytes_read: usize = 0;
+
+        while (true) {
+            bytes_read = try reader.readAll(&buffer);
+
+            try ctx.writer.writeAll(buffer[0..bytes_read]);
+
+            if (bytes_read < buffer.len) {
+                break;
+            }
+        }
+    }
+
+    try ctx.writer.print("\n", .{});
+
+    return Result.cont();
+}
+
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     const cmd, const args = util.splitAtNext(input, " ");
 
@@ -179,6 +208,7 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
             .type => try handleTypeCommand(ctx, args),
             .pwd => try handlePwdCommand(ctx),
             .cd => try handleCdCommand(ctx, args),
+            .cat => try handleCatCommand(ctx, args),
         };
     } else {
         return null;
