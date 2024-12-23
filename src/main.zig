@@ -207,7 +207,7 @@ fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
 
     if (resolveFileSymbol(ctx, process_name)) |file| {
         // const argv = [_][]const u8{ file.path, args };
-        const argv = try ctx.allocator.alloc([]const u8, args_list.items.len);
+        const argv = try ctx.allocator.alloc([]const u8, args_list.items.len + 1);
         argv[0] = file.path;
         for (args_list.items, 0..) |arg, i| {
             argv[i + 1] = arg;
