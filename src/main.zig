@@ -115,7 +115,17 @@ fn handleExitCommand(args: []const u8) !Result {
 }
 
 fn handleEchoCommand(ctx: Context, args: []const u8) !Result {
-    try ctx.writer.print("{s}\n", .{args});
+    var token_iter = util.tokenize(args);
+    var first = true;
+
+    while (token_iter.next()) |arg| {
+        if (!first) try ctx.writer.print(" ", .{});
+        first = false;
+
+        try ctx.writer.print("{s}", .{arg});
+    }
+
+    try ctx.writer.print("\n", .{});
 
     return Result.cont();
 }
