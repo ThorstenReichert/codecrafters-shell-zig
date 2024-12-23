@@ -173,17 +173,32 @@ fn handleCdCommand(ctx: Context, args: []const u8) !Result {
 
 fn handleCatCommand(ctx: Context, args: []const u8) !Result {
     var file_iter = util.tokenize(args);
-    var result = try ctx.allocator.alloc(u8, 0);
+    var buffer: [1024]u8 = undefined;
+    var first = true;
 
     while (file_iter.next()) |path| {
         var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
         defer file.close();
 
-        const content: []const u8 = try file.readToEndAlloc(ctx.allocator, 1024 * 1024);
-        result = util.join(ctx.allocator, &[_]([]const u8){ result, content });
+        var reader = file.reader();
+        var bytes_read: usize = 0;
+
+        if (!first) try ctx.writer.print(" ", .{});
+
+        while (true) {
+            bytes_read = try reader.readAll(&buffer);
+
+            try ctx.writer.print("{s}", .{buffer[0..bytes_read]});
+
+            if (bytes_read < buffer.len) {
+                break;
+            }
+        }
+
+        first = false;
     }
 
-    try ctx.writer.print("{s}\n", .{result});
+    try ctx.writer.print("\n", .{});
 
     return Result.cont();
 }
