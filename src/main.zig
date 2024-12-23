@@ -69,8 +69,6 @@ fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
         return BuiltinSymbol{ .name = symbol_name, .kind = .pwd };
     } else if (mem.eql(u8, symbol_name, "cd")) {
         return BuiltinSymbol{ .name = symbol_name, .kind = .cd };
-    } else if (mem.eql(u8, symbol_name, "cat")) {
-        return BuiltinSymbol{ .name = symbol_name, .kind = .cat };
     } else {
         return null;
     }
