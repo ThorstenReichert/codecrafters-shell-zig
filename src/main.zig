@@ -100,13 +100,15 @@ fn resolveFileSymbol(ctx: Context, symbol_name: []const u8) ?FileSymbol {
 }
 
 fn resolveSymbol(ctx: Context, symbol_name: []const u8) Symbol {
+    if (resolveFileSymbol(ctx, symbol_name)) |file| {
+        return Symbol{ .file = file };
+    }
+
     if (resolveBuiltinSymbol(symbol_name)) |builtin| {
         return Symbol{ .builtin = builtin };
-    } else if (resolveFileSymbol(ctx, symbol_name)) |file| {
-        return Symbol{ .file = file };
-    } else {
-        return Symbol{ .unknown = UnknownSymbol{ .name = symbol_name } };
     }
+
+    return Symbol{ .unknown = UnknownSymbol{ .name = symbol_name } };
 }
 
 fn handleExitCommand(args: []const u8) !Result {
