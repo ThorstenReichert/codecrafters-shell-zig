@@ -185,7 +185,7 @@ fn handleCatCommand(ctx: Context, args: []const u8) !Result {
         while (true) {
             bytes_read = try reader.readAll(&buffer);
 
-            try ctx.writer.writeAll(buffer[0..bytes_read]);
+            try ctx.writer.print("{s}", .{buffer[0..bytes_read]});
 
             if (bytes_read < buffer.len) {
                 break;
