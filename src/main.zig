@@ -31,7 +31,7 @@ const Context = struct {
     writer: std.io.BufferedWriter(4096, std.fs.File.Writer).Writer,
 };
 
-const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd, cat };
+const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd };
 const BuiltinSymbol = struct { name: []const u8, kind: BuiltinSymbolKind };
 const FileSymbol = struct { name: []const u8, path: []const u8 };
 const UnknownSymbol = struct { name: []const u8 };
@@ -100,12 +100,12 @@ fn resolveFileSymbol(ctx: Context, symbol_name: []const u8) ?FileSymbol {
 }
 
 fn resolveSymbol(ctx: Context, symbol_name: []const u8) Symbol {
-    if (resolveFileSymbol(ctx, symbol_name)) |file| {
-        return Symbol{ .file = file };
-    }
-
     if (resolveBuiltinSymbol(symbol_name)) |builtin| {
         return Symbol{ .builtin = builtin };
+    }
+
+    if (resolveFileSymbol(ctx, symbol_name)) |file| {
+        return Symbol{ .file = file };
     }
 
     return Symbol{ .unknown = UnknownSymbol{ .name = symbol_name } };
@@ -173,33 +173,6 @@ fn handleCdCommand(ctx: Context, args: []const u8) !Result {
     return Result.cont();
 }
 
-fn handleCatCommand(ctx: Context, args: []const u8) !Result {
-    var file_iter = util.tokenize(args);
-    var buffer: [1024]u8 = undefined;
-
-    while (file_iter.next()) |path| {
-        var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-        defer file.close();
-
-        var reader = file.reader();
-        var bytes_read: usize = 0;
-
-        while (true) {
-            bytes_read = try reader.readAll(&buffer);
-
-            try ctx.writer.print("{s}", .{buffer[0..bytes_read]});
-
-            if (bytes_read < buffer.len) {
-                break;
-            }
-        }
-    }
-
-    try ctx.writer.print("\n", .{});
-
-    return Result.cont();
-}
-
 fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     const cmd, const args = util.splitAtNext(input, " ");
 
@@ -210,7 +183,6 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
             .type => try handleTypeCommand(ctx, args),
             .pwd => try handlePwdCommand(ctx),
             .cd => try handleCdCommand(ctx, args),
-            .cat => try handleCatCommand(ctx, args),
         };
     } else {
         return null;
