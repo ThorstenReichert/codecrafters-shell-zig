@@ -28,7 +28,7 @@ const Result = union(enum) {
 const Context = struct {
     allocator: std.mem.Allocator,
     env_map: std.process.EnvMap,
-    writer: std.fs.File.Writer,
+    writer: std.io.BufferedWriter(4096, std.fs.File.Writer).Writer,
 };
 
 const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd, cat };
@@ -174,7 +174,6 @@ fn handleCdCommand(ctx: Context, args: []const u8) !Result {
 fn handleCatCommand(ctx: Context, args: []const u8) !Result {
     var file_iter = util.tokenize(args);
     var buffer: [1024]u8 = undefined;
-    var first = true;
 
     while (file_iter.next()) |path| {
         var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
@@ -182,8 +181,6 @@ fn handleCatCommand(ctx: Context, args: []const u8) !Result {
 
         var reader = file.reader();
         var bytes_read: usize = 0;
-
-        if (!first) try ctx.writer.print(" ", .{});
 
         while (true) {
             bytes_read = try reader.readAll(&buffer);
@@ -194,8 +191,6 @@ fn handleCatCommand(ctx: Context, args: []const u8) !Result {
                 break;
             }
         }
-
-        first = false;
     }
 
     try ctx.writer.print("\n", .{});
@@ -276,12 +271,14 @@ pub fn main() !u8 {
     var env_map = try std.process.getEnvMap(gpa.allocator());
     defer env_map.deinit();
 
-    var ctx = Context{ .allocator = gpa.allocator(), .env_map = env_map, .writer = stdout };
-    var buffer: [1024]u8 = undefined;
+    var out = std.io.bufferedWriter(stdout);
+    var ctx = Context{ .allocator = gpa.allocator(), .env_map = env_map, .writer = out.writer() };
+    var buffer: [4096]u8 = undefined;
+
+    try out.writer().print("$ ", .{});
+    try out.flush();
 
     while (true) {
-        try stdout.print("$ ", .{});
-
         @memset(&buffer, 0);
         const user_input = nextInput(stdin, &buffer);
 
@@ -298,5 +295,8 @@ pub fn main() !u8 {
                 .exit => |code| return code,
             }
         }
+
+        try out.writer().print("$ ", .{});
+        try out.flush();
     }
 }
