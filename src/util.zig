@@ -38,9 +38,10 @@ test "splitAtNext [separator at end]" {
 pub const TokenIterator = struct {
     rest: []const u8,
     single_quote: bool,
+    double_quote: bool,
 
     fn new(text: []const u8) TokenIterator {
-        return TokenIterator{ .rest = text, .single_quote = false };
+        return TokenIterator{ .rest = text, .single_quote = false, .double_quote = false };
     }
 
     pub fn next(self: *TokenIterator) ?[]const u8 {
@@ -51,6 +52,7 @@ pub const TokenIterator = struct {
         }
 
         if (text[0] == '\'') self.single_quote = true;
+        if (text[0] == '\"') self.double_quote = true;
 
         var i: usize = 0;
         var start: usize = 0;
@@ -64,6 +66,20 @@ pub const TokenIterator = struct {
             }
 
             if (i < text.len) self.single_quote = false;
+
+            const token = text[start..i];
+            self.rest = text[(i + 1)..];
+
+            return token;
+        } else if (self.double_quote) {
+            i += 1;
+            start += 1;
+
+            while (i < text.len and text[i] != '\"') {
+                i += 1;
+            }
+
+            if (i < text.len) self.double_quote = false;
 
             const token = text[start..i];
             self.rest = text[(i + 1)..];
@@ -106,6 +122,15 @@ pub fn tokenize(input: []const u8) NonEmptyTokenIterator {
 
 test "tokenize with single quotes" {
     var iter = tokenize("cat '/tmp/file name' '/tmp/file name with spaces'");
+
+    try expect(mem.eql(u8, "cat", iter.next().?));
+    try expect(mem.eql(u8, "/tmp/file name", iter.next().?));
+    try expect(mem.eql(u8, "/tmp/file name with spaces", iter.next().?));
+    try expect(iter.next() == null);
+}
+
+test "tokenize with double quotes" {
+    var iter = tokenize("cat \"/tmp/file name\" \"/tmp/file name with spaces\"");
 
     try expect(mem.eql(u8, "cat", iter.next().?));
     try expect(mem.eql(u8, "/tmp/file name", iter.next().?));
