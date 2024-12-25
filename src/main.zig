@@ -198,22 +198,16 @@ fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
     var cmd = token_iter.next() orelse return null;
     const process_name = cmd[run_prefix.len..];
 
-    var args_list = std.ArrayList([]const u8).init(ctx.allocator);
-    defer args_list.deinit();
-
-    while (token_iter.next()) |arg| {
-        try args_list.append(arg);
-    }
-
     if (resolveFileSymbol(ctx, process_name)) |file| {
-        // const argv = [_][]const u8{ file.path, args };
-        const argv = try ctx.allocator.alloc([]const u8, args_list.items.len + 1);
-        argv[0] = file.path;
-        for (args_list.items, 0..) |arg, i| {
-            argv[i + 1] = arg;
+        var argv = std.ArrayList([]const u8).init(ctx.allocator);
+        defer argv.deinit();
+
+        try argv.append(file.path);
+        while (token_iter.next()) |arg| {
+            try argv.append(arg);
         }
 
-        var proc = std.process.Child.init(argv, ctx.allocator);
+        var proc = std.process.Child.init(argv.items, ctx.allocator);
 
         const term = try proc.spawnAndWait();
 
