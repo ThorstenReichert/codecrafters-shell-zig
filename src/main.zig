@@ -117,10 +117,10 @@ fn handleExitCommand(args: []const u8) !Result {
 }
 
 fn handleEchoCommand(ctx: Context, args: []const u8) !Result {
-    var token_iter = util.tokenize(args);
+    var token_iter = util.tokenize(ctx.allocator, args);
     var first = true;
 
-    while (token_iter.next()) |arg| {
+    while (try token_iter.next()) |arg| {
         if (!first) try ctx.writer.print(" ", .{});
         first = false;
 
@@ -194,8 +194,8 @@ fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
         return null;
     }
 
-    var token_iter = util.tokenize(input);
-    var cmd = token_iter.next() orelse return null;
+    var token_iter = util.tokenize(ctx.allocator, input);
+    var cmd = try token_iter.next() orelse return null;
     const process_name = cmd[run_prefix.len..];
 
     if (resolveFileSymbol(ctx, process_name)) |file| {
@@ -203,7 +203,7 @@ fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
         defer argv.deinit();
 
         try argv.append(file.path);
-        while (token_iter.next()) |arg| {
+        while (try token_iter.next()) |arg| {
             try argv.append(arg);
         }
 

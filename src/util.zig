@@ -36,15 +36,21 @@ test "splitAtNext [separator at end]" {
 }
 
 pub const TokenIterator = struct {
+    allocator: std.mem.Allocator,
     rest: []const u8,
     single_quote: bool,
     double_quote: bool,
 
-    fn new(text: []const u8) TokenIterator {
-        return TokenIterator{ .rest = text, .single_quote = false, .double_quote = false };
+    fn new(allocator: std.mem.Allocator, text: []const u8) TokenIterator {
+        return TokenIterator{
+            .allocator = allocator,
+            .rest = text,
+            .single_quote = false,
+            .double_quote = false,
+        };
     }
 
-    pub fn next(self: *TokenIterator) ?[]const u8 {
+    pub fn next(self: *TokenIterator) !?[]const u8 {
         const text = self.rest;
 
         if (text.len == 0) {
@@ -86,14 +92,21 @@ pub const TokenIterator = struct {
 
             return token;
         } else {
+            var token = std.ArrayList(u8).init(self.allocator);
+            defer token.deinit();
+
             while (i < text.len and text[i] != ' ') {
+                if (text[i] == '\\') {
+                    i += 1;
+                }
+
+                try token.append(text[i]);
                 i += 1;
             }
 
-            const token = text[start..i];
             self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
 
-            return token;
+            return try token.toOwnedSlice();
         }
     }
 };
@@ -101,12 +114,12 @@ pub const TokenIterator = struct {
 pub const NonEmptyTokenIterator = struct {
     iter: TokenIterator,
 
-    fn new(text: []const u8) NonEmptyTokenIterator {
-        return NonEmptyTokenIterator{ .iter = TokenIterator.new(text) };
+    fn new(allocator: std.mem.Allocator, text: []const u8) NonEmptyTokenIterator {
+        return NonEmptyTokenIterator{ .iter = TokenIterator.new(allocator, text) };
     }
 
-    pub fn next(self: *NonEmptyTokenIterator) ?[]const u8 {
-        while (self.iter.next()) |item| {
+    pub fn next(self: *NonEmptyTokenIterator) !?[]const u8 {
+        while (try self.iter.next()) |item| {
             if (item.len > 0) {
                 return item;
             }
@@ -116,34 +129,55 @@ pub const NonEmptyTokenIterator = struct {
     }
 };
 
-pub fn tokenize(input: []const u8) NonEmptyTokenIterator {
-    return NonEmptyTokenIterator.new(input);
+pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) NonEmptyTokenIterator {
+    return NonEmptyTokenIterator.new(allocator, input);
+}
+
+test "tokenize with escaped whitespace outside quotes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var iter = tokenize(arena.allocator(), "echo world\\ \\ \\ \\ \\ \\ script");
+
+    try expect(mem.eql(u8, "echo", (try iter.next()).?));
+    try expect(mem.eql(u8, "world      script", (try iter.next()).?));
+    try expect(try iter.next() == null);
 }
 
 test "tokenize with single quotes" {
-    var iter = tokenize("cat '/tmp/file name' '/tmp/file name with spaces'");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    try expect(mem.eql(u8, "cat", iter.next().?));
-    try expect(mem.eql(u8, "/tmp/file name", iter.next().?));
-    try expect(mem.eql(u8, "/tmp/file name with spaces", iter.next().?));
-    try expect(iter.next() == null);
+    var iter = tokenize(arena.allocator(), "cat '/tmp/file name' '/tmp/file name with spaces'");
+
+    try expect(mem.eql(u8, "cat", (try iter.next()).?));
+    try expect(mem.eql(u8, "/tmp/file name", (try iter.next()).?));
+    try expect(mem.eql(u8, "/tmp/file name with spaces", (try iter.next()).?));
+    try expect(try iter.next() == null);
 }
 
 test "tokenize with double quotes" {
-    var iter = tokenize("cat \"/tmp/file name\" \"/tmp/file name with spaces\"");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    try expect(mem.eql(u8, "cat", iter.next().?));
-    try expect(mem.eql(u8, "/tmp/file name", iter.next().?));
-    try expect(mem.eql(u8, "/tmp/file name with spaces", iter.next().?));
-    try expect(iter.next() == null);
+    var iter = tokenize(arena.allocator(), "cat \"/tmp/file name\" \"/tmp/file name with spaces\"");
+
+    try expect(mem.eql(u8, "cat", (try iter.next()).?));
+    try expect(mem.eql(u8, "/tmp/file name", (try iter.next()).?));
+    try expect(mem.eql(u8, "/tmp/file name with spaces", (try iter.next()).?));
+    try expect(try iter.next() == null);
 }
 
 test "tokenize with mixed quotation" {
-    var iter = tokenize("cat 'test1.txt' test2.txt");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    try expect(mem.eql(u8, "cat", iter.next().?));
-    try expect(mem.eql(u8, "test1.txt", iter.next().?));
-    try expect(mem.eql(u8, "test2.txt", iter.next().?));
+    var iter = tokenize(arena.allocator(), "cat 'test1.txt' test2.txt");
+
+    try expect(mem.eql(u8, "cat", (try iter.next()).?));
+    try expect(mem.eql(u8, "test1.txt", (try iter.next()).?));
+    try expect(mem.eql(u8, "test2.txt", (try iter.next()).?));
+    try expect(try iter.next() == null);
 }
 
 pub fn join(allocator: mem.Allocator, parts: []const []const u8) []u8 {
