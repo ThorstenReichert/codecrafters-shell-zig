@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const expect = std.testing.expect;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const pal = @import("pal.zig").Current;
 
 pub const SplitResult = struct { []const u8, []const u8 };
@@ -17,22 +18,22 @@ pub fn splitAtNext(text: []const u8, separator: []const u8) SplitResult {
 test "splitAtNext [separator in middle]" {
     const token, const remainder = splitAtNext("first second third", " ");
 
-    try expect(mem.eql(u8, token, "first"));
-    try expect(mem.eql(u8, remainder, "second third"));
+    try expectEqualStrings("first", token);
+    try expectEqualStrings("second third", remainder);
 }
 
 test "splitAtNext [separator at start]" {
     const token, const remainder = splitAtNext(" first second", " ");
 
-    try expect(mem.eql(u8, token, ""));
-    try expect(mem.eql(u8, remainder, "first second"));
+    try expectEqualStrings("", token);
+    try expectEqualStrings("first second", remainder);
 }
 
 test "splitAtNext [separator at end]" {
     const token, const remainder = splitAtNext("first ", " ");
 
-    try expect(mem.eql(u8, token, "first"));
-    try expect(mem.eql(u8, remainder, ""));
+    try expectEqualStrings("first", token);
+    try expectEqualStrings("", remainder);
 }
 
 pub const TokenIterator = struct {
@@ -57,51 +58,52 @@ pub const TokenIterator = struct {
             return null;
         }
 
+        var token = std.ArrayList(u8).init(self.allocator);
+        defer token.deinit();
+
         if (text[0] == '\'') self.single_quote = true;
         if (text[0] == '\"') self.double_quote = true;
 
         var i: usize = 0;
         var start: usize = 0;
 
-        if (self.single_quote) {
-            i += 1;
-            start += 1;
-
-            while (i < text.len and text[i] != '\'') {
+        while (i < text.len) {
+            if (self.single_quote) {
                 i += 1;
-            }
+                start += 1;
 
-            if (i < text.len) self.single_quote = false;
-
-            const token = text[start..i];
-            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
-
-            return token;
-        } else if (self.double_quote) {
-            var token = std.ArrayList(u8).init(self.allocator);
-            defer token.deinit();
-
-            i += 1;
-            start += 1;
-
-            while (i < text.len and text[i] != '\"') {
-                if (text[i] == '\\' and (i + 1) < text.len and text[i + 1] == '\\') {
+                while (i < text.len and text[i] != '\'') {
+                    try token.append(text[i]);
                     i += 1;
                 }
 
-                try token.append(text[i]);
+                if (i < text.len) {
+                    i += 1;
+                    self.single_quote = false;
+                }
+            } else if (self.double_quote) {
                 i += 1;
-            }
+                start += 1;
 
-            if (i < text.len) self.double_quote = false;
-            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
+                while (i < text.len and text[i] != '\"') {
+                    if (text[i] == '\\' and (i + 1) < text.len) {
+                        const next_char = text[i + 1];
+                        if (next_char == '\\' or next_char == '\"') {
+                            i += 1;
+                        }
+                    }
 
-            return try token.toOwnedSlice();
-        } else {
-            var token = std.ArrayList(u8).init(self.allocator);
-            defer token.deinit();
+                    try token.append(text[i]);
+                    i += 1;
+                }
 
-            while (i < text.len and text[i] != ' ') {
+                if (i < text.len) {
+                    i += 1;
+                    self.double_quote = false;
+                }
+            } else if (text[i] == ' ') {
+                break;
+            } else {
                 if (text[i] == '\\') {
                     i += 1;
                 }
@@ -109,11 +111,10 @@ pub const TokenIterator = struct {
                 try token.append(text[i]);
                 i += 1;
             }
-
-            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
-
-            return try token.toOwnedSlice();
         }
+
+        self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
+        return try token.toOwnedSlice();
     }
 };
 
@@ -143,10 +144,21 @@ test "tokenize with escaped double quote inside double quotes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
+    var iter = tokenize(arena.allocator(), "echo \"hello\\\"insidequotes\"script\\\"");
+
+    try expectEqualStrings("echo", (try iter.next()).?);
+    try expectEqualStrings("hello\"insidequotesscript\"", (try iter.next()).?);
+    try expect(try iter.next() == null);
+}
+
+test "tokenize with backslash inside double quotes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
     var iter = tokenize(arena.allocator(), "echo \"hello'script'\\\\n'world");
 
-    try expect(mem.eql(u8, "echo", (try iter.next()).?));
-    try expect(mem.eql(u8, "hello'script'\\n'world", (try iter.next()).?));
+    try expectEqualStrings("echo", (try iter.next()).?);
+    try expectEqualStrings("hello'script'\\n'world", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
@@ -156,8 +168,8 @@ test "tokenize with backslash inside single quotes" {
 
     var iter = tokenize(arena.allocator(), "echo 'shell\\\\\\nscript'");
 
-    try expect(mem.eql(u8, "echo", (try iter.next()).?));
-    try expect(mem.eql(u8, "shell\\\\\\nscript", (try iter.next()).?));
+    try expectEqualStrings("echo", (try iter.next()).?);
+    try expectEqualStrings("shell\\\\\\nscript", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
@@ -167,8 +179,8 @@ test "tokenize with escaped whitespace outside quotes" {
 
     var iter = tokenize(arena.allocator(), "echo world\\ \\ \\ \\ \\ \\ script");
 
-    try expect(mem.eql(u8, "echo", (try iter.next()).?));
-    try expect(mem.eql(u8, "world      script", (try iter.next()).?));
+    try expectEqualStrings("echo", (try iter.next()).?);
+    try expectEqualStrings("world      script", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
@@ -178,9 +190,9 @@ test "tokenize with single quotes" {
 
     var iter = tokenize(arena.allocator(), "cat '/tmp/file name' '/tmp/file name with spaces'");
 
-    try expect(mem.eql(u8, "cat", (try iter.next()).?));
-    try expect(mem.eql(u8, "/tmp/file name", (try iter.next()).?));
-    try expect(mem.eql(u8, "/tmp/file name with spaces", (try iter.next()).?));
+    try expectEqualStrings("cat", (try iter.next()).?);
+    try expectEqualStrings("/tmp/file name", (try iter.next()).?);
+    try expectEqualStrings("/tmp/file name with spaces", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
@@ -190,9 +202,9 @@ test "tokenize with double quotes" {
 
     var iter = tokenize(arena.allocator(), "cat \"/tmp/file name\" \"/tmp/file name with spaces\"");
 
-    try expect(mem.eql(u8, "cat", (try iter.next()).?));
-    try expect(mem.eql(u8, "/tmp/file name", (try iter.next()).?));
-    try expect(mem.eql(u8, "/tmp/file name with spaces", (try iter.next()).?));
+    try expectEqualStrings("cat", (try iter.next()).?);
+    try expectEqualStrings("/tmp/file name", (try iter.next()).?);
+    try expectEqualStrings("/tmp/file name with spaces", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
@@ -202,9 +214,9 @@ test "tokenize with mixed quotation" {
 
     var iter = tokenize(arena.allocator(), "cat 'test1.txt' test2.txt");
 
-    try expect(mem.eql(u8, "cat", (try iter.next()).?));
-    try expect(mem.eql(u8, "test1.txt", (try iter.next()).?));
-    try expect(mem.eql(u8, "test2.txt", (try iter.next()).?));
+    try expectEqualStrings("cat", (try iter.next()).?);
+    try expectEqualStrings("test1.txt", (try iter.next()).?);
+    try expectEqualStrings("test2.txt", (try iter.next()).?);
     try expect(try iter.next() == null);
 }
 
