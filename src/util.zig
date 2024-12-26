@@ -74,23 +74,29 @@ pub const TokenIterator = struct {
             if (i < text.len) self.single_quote = false;
 
             const token = text[start..i];
-            self.rest = text[(i + 1)..];
+            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
 
             return token;
         } else if (self.double_quote) {
+            var token = std.ArrayList(u8).init(self.allocator);
+            defer token.deinit();
+
             i += 1;
             start += 1;
 
             while (i < text.len and text[i] != '\"') {
+                if (text[i] == '\\' and (i + 1) < text.len and text[i + 1] == '\\') {
+                    i += 1;
+                }
+
+                try token.append(text[i]);
                 i += 1;
             }
 
             if (i < text.len) self.double_quote = false;
+            self.rest = if (i < text.len) text[(i + 1)..] else &[0]u8{};
 
-            const token = text[start..i];
-            self.rest = text[(i + 1)..];
-
-            return token;
+            return try token.toOwnedSlice();
         } else {
             var token = std.ArrayList(u8).init(self.allocator);
             defer token.deinit();
@@ -131,6 +137,28 @@ pub const NonEmptyTokenIterator = struct {
 
 pub fn tokenize(allocator: std.mem.Allocator, input: []const u8) NonEmptyTokenIterator {
     return NonEmptyTokenIterator.new(allocator, input);
+}
+
+test "tokenize with escaped double quote inside double quotes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var iter = tokenize(arena.allocator(), "echo \"hello'script'\\\\n'world");
+
+    try expect(mem.eql(u8, "echo", (try iter.next()).?));
+    try expect(mem.eql(u8, "hello'script'\\n'world", (try iter.next()).?));
+    try expect(try iter.next() == null);
+}
+
+test "tokenize with backslash inside single quotes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var iter = tokenize(arena.allocator(), "echo 'shell\\\\\\nscript'");
+
+    try expect(mem.eql(u8, "echo", (try iter.next()).?));
+    try expect(mem.eql(u8, "shell\\\\\\nscript", (try iter.next()).?));
+    try expect(try iter.next() == null);
 }
 
 test "tokenize with escaped whitespace outside quotes" {
