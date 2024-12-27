@@ -254,10 +254,12 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
         try argv.appendSlice(input[1..]);
 
         var proc = std.process.Child.init(argv.items, ctx.allocator);
+        proc.stdout_behavior = .Pipe;
 
-        const term = try proc.spawnAndWait();
+        try proc.spawn();
+        try util.forward(proc.stdout.?, ctx.writer);
 
-        return switch (term) {
+        return switch (try proc.wait()) {
             .Exited => |code| if (code == 0) Result.cont() else Result.exit(1),
             else => Result.exit(1),
         };

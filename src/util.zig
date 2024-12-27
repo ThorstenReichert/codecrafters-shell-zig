@@ -243,3 +243,16 @@ pub fn join_path(allocator: mem.Allocator, path1: []const u8, path2: []const u8)
 
     return join(allocator, &[_]([]const u8){ left, separator, right });
 }
+
+pub fn forward(source: anytype, target: anytype) !void {
+    var buffer: [1024]u8 = undefined;
+
+    while (true) {
+        const bytes_read = try source.read(&buffer);
+        if (bytes_read > 0) {
+            try target.writeAll(buffer[0..bytes_read]);
+        } else {
+            return;
+        }
+    }
+}
