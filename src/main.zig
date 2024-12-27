@@ -75,6 +75,15 @@ const Symbol = union(SymbolType) {
     unknown: UnknownSymbol,
 };
 
+fn openTruncate(path: []const u8) !std.fs.File {
+    const file = try std.fs.cwd().createFile(path, .{
+        .read = false,
+        .truncate = true,
+    });
+
+    return file;
+}
+
 fn openAppend(path: []const u8) !std.fs.File {
     const file = try std.fs.cwd().createFile(path, .{
         .read = false,
@@ -105,14 +114,14 @@ fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input
     while (try token_iter.next()) |token| {
         if (mem.eql(u8, token, ">") or mem.eql(u8, token, "1>")) {
             if (try token_iter.next()) |file| {
-                out_target = Target{ .file = try openAppend(file) };
+                out_target = Target{ .file = try openTruncate(file) };
             }
             break;
         }
 
         if (mem.eql(u8, token, "2>")) {
             if (try token_iter.next()) |file| {
-                err_target = Target{ .file = try openAppend(file) };
+                err_target = Target{ .file = try openTruncate(file) };
             }
             break;
         }
