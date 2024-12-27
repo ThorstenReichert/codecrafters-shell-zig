@@ -27,6 +27,26 @@ const Target = union(enum) {
             else => {},
         }
     }
+
+    pub fn fileTruncate(path: []const u8) !Target {
+        const file = try std.fs.cwd().createFile(path, .{
+            .read = false,
+            .truncate = true,
+        });
+
+        return Target{ .file = file };
+    }
+
+    pub fn fileAppend(path: []const u8) !Target {
+        const file = try std.fs.cwd().createFile(path, .{
+            .read = false,
+            .truncate = false,
+        });
+
+        try file.seekFromEnd(0);
+
+        return Target{ .file = file };
+    }
 };
 const Input = struct {
     tokens: []const []const u8,
@@ -75,26 +95,6 @@ const Symbol = union(SymbolType) {
     unknown: UnknownSymbol,
 };
 
-fn openTruncate(path: []const u8) !std.fs.File {
-    const file = try std.fs.cwd().createFile(path, .{
-        .read = false,
-        .truncate = true,
-    });
-
-    return file;
-}
-
-fn openAppend(path: []const u8) !std.fs.File {
-    const file = try std.fs.cwd().createFile(path, .{
-        .read = false,
-        .truncate = false,
-    });
-
-    try file.seekFromEnd(0);
-
-    return file;
-}
-
 fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input {
     const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch {
         return Input.empty();
@@ -114,14 +114,28 @@ fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input
     while (try token_iter.next()) |token| {
         if (mem.eql(u8, token, ">") or mem.eql(u8, token, "1>")) {
             if (try token_iter.next()) |file| {
-                out_target = Target{ .file = try openTruncate(file) };
+                out_target = try Target.fileTruncate(file);
+            }
+            break;
+        }
+
+        if (mem.eql(u8, token, ">>") or mem.eql(u8, token, "1>>")) {
+            if (try token_iter.next()) |file| {
+                out_target = try Target.fileAppend(file);
             }
             break;
         }
 
         if (mem.eql(u8, token, "2>")) {
             if (try token_iter.next()) |file| {
-                err_target = Target{ .file = try openTruncate(file) };
+                err_target = try Target.fileTruncate(file);
+            }
+            break;
+        }
+
+        if (mem.eql(u8, token, "2>>")) {
+            if (try token_iter.next()) |file| {
+                err_target = try Target.fileAppend(file);
             }
             break;
         }
