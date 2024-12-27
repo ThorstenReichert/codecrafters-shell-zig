@@ -16,11 +16,28 @@ fn trace(comptime format: []const u8, args: anytype) void {
 
 const Target = union(enum) {
     stdout: void,
-    file: []const u8,
+    file: std.fs.File,
+
+    pub fn deinit(self: *const Target) void {
+        switch (self.*) {
+            .file => |handle| {
+                handle.close();
+            },
+            else => {},
+        }
+    }
 };
 const Input = struct {
     tokens: []const []const u8,
     target: Target,
+
+    pub fn deinit(self: *Input) void {
+        self.target.deinit();
+    }
+
+    pub fn empty() Input {
+        return Input{ .tokens = &[0][]const u8{}, .target = .stdout };
+    }
 };
 const Result = union(enum) {
     exit: u8,
@@ -50,10 +67,21 @@ const Symbol = union(SymbolType) {
     unknown: UnknownSymbol,
 };
 
-fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !?Input {
+fn openAppend(path: []const u8) !std.fs.File {
+    const file = try std.fs.cwd().createFile(path, .{
+        .read = false,
+        .truncate = false,
+    });
+
+    try file.seekFromEnd(0);
+
+    return file;
+}
+
+fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input {
     const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch {
-        return null;
-    } orelse return null;
+        return Input.empty();
+    } orelse return Input.empty();
 
     const trimmed_line = if (Pal.trim_cr)
         mem.trimRight(u8, line, "\r")
@@ -76,7 +104,10 @@ fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !?Inpu
 
     return Input{
         .tokens = try input.toOwnedSlice(),
-        .target = if (target) |file| Target{ .file = file } else Target{ .stdout = {} },
+        .target = if (target) |file|
+            Target{ .file = try openAppend(file) }
+        else
+            Target{ .stdout = {} },
     };
 }
 
@@ -275,26 +306,31 @@ pub fn main() !u8 {
         defer arena.deinit();
 
         @memset(&buffer, 0);
-        const user_input = try nextInput(arena.allocator(), stdin, &buffer);
+        var input = try nextInput(arena.allocator(), stdin, &buffer);
+        defer input.deinit();
 
-        if (user_input) |input| {
-            var out = std.io.bufferedWriter(stdout);
+        var out = switch (input.target) {
+            .stdout => std.io.bufferedWriter(stdout),
+            .file => |file| std.io.bufferedWriter(file.writer()),
+        };
 
-            const ctx = Context{
-                .allocator = arena.allocator(),
-                .env_map = env_map,
-                .writer = out.writer(),
-            };
+        const ctx = Context{
+            .allocator = arena.allocator(),
+            .env_map = env_map,
+            .writer = out.writer(),
+        };
 
-            const result = try handleInput(ctx, input.tokens);
-            try out.flush();
+        const result = try handleInput(ctx, input.tokens);
+        try out.flush();
 
-            switch (result) {
-                .cont => {},
-                .exit => |code| return code,
-            }
+        switch (result) {
+            .cont => {},
+            .exit => |code| return code,
+        }
 
-            try stdout.writeAll("\n");
+        switch (input.target) {
+            .stdout => try stdout.writeAll("\n"),
+            else => {},
         }
     }
 }
