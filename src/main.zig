@@ -14,6 +14,14 @@ fn trace(comptime format: []const u8, args: anytype) void {
     }
 }
 
+const Target = union(enum) {
+    stdout: void,
+    file: []const u8,
+};
+const Input = struct {
+    tokens: []const []const u8,
+    target: Target,
+};
 const Result = union(enum) {
     exit: u8,
     cont,
@@ -42,20 +50,34 @@ const Symbol = union(SymbolType) {
     unknown: UnknownSymbol,
 };
 
-fn nextInput(reader: anytype, buffer: []u8) ?[]const u8 {
+fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !?Input {
     const line = reader.readUntilDelimiterOrEof(buffer, '\n') catch {
         return null;
-    };
+    } orelse return null;
 
-    if (line) |l| {
-        if (Pal.trim_cr) {
-            return mem.trimRight(u8, l, "\r");
-        } else {
-            return l;
+    const trimmed_line = if (Pal.trim_cr)
+        mem.trimRight(u8, line, "\r")
+    else
+        line;
+
+    var token_iter = util.tokenize(allocator, trimmed_line);
+    var input = std.ArrayList([]const u8).init(allocator);
+    var target: ?[]const u8 = null;
+    defer input.deinit();
+
+    while (try token_iter.next()) |token| {
+        if (mem.eql(u8, token, ">") or mem.eql(u8, token, "1>")) {
+            target = try token_iter.next();
+            break;
         }
-    } else {
-        return null;
+
+        try input.append(token);
     }
+
+    return Input{
+        .tokens = try input.toOwnedSlice(),
+        .target = if (target) |file| Target{ .file = file } else Target{ .stdout = {} },
+    };
 }
 
 fn resolveBuiltinSymbol(symbol_name: []const u8) ?BuiltinSymbol {
@@ -109,40 +131,36 @@ fn resolveSymbol(ctx: Context, symbol_name: []const u8) Symbol {
     return Symbol{ .unknown = UnknownSymbol{ .name = symbol_name } };
 }
 
-fn handleExitCommand(args: []const u8) !Result {
-    const code_text, _ = util.splitAtNext(args, " ");
-    const code = try std.fmt.parseInt(u8, code_text, 10);
+fn handleExitCommand(args: []const []const u8) !Result {
+    const code = try std.fmt.parseInt(u8, args[0], 10);
 
     return Result.exit(code);
 }
 
-fn handleEchoCommand(ctx: Context, args: []const u8) !Result {
-    var token_iter = util.tokenize(ctx.allocator, args);
+fn handleEchoCommand(ctx: Context, args: []const []const u8) !Result {
     var first = true;
 
-    while (try token_iter.next()) |arg| {
+    for (args) |arg| {
         if (!first) try ctx.writer.print(" ", .{});
         first = false;
 
         try ctx.writer.print("{s}", .{arg});
     }
 
-    try ctx.writer.print("\n", .{});
-
     return Result.cont();
 }
 
-fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
-    const type_text, _ = util.splitAtNext(args, " ");
-    const symbol = resolveSymbol(ctx, type_text);
+fn handleTypeCommand(ctx: Context, args: []const []const u8) !Result {
+    const arg = args[0];
+    const symbol = resolveSymbol(ctx, arg);
 
-    const builtin = "{s} is a shell builtin\n";
-    const is_program = "{s} is {s}\n";
-    const not_found = "{s}: not found\n";
+    const builtin = "{s} is a shell builtin";
+    const is_program = "{s} is {s}";
+    const not_found = "{s}: not found";
     switch (symbol) {
         .builtin => |builtin_symbol| try ctx.writer.print(builtin, .{builtin_symbol.name}),
         .file => |file_symbol| try ctx.writer.print(is_program, .{ file_symbol.name, file_symbol.path }),
-        .unknown => try ctx.writer.print(not_found, .{type_text}),
+        .unknown => try ctx.writer.print(not_found, .{arg}),
     }
 
     return Result.cont();
@@ -151,19 +169,20 @@ fn handleTypeCommand(ctx: Context, args: []const u8) !Result {
 fn handlePwdCommand(ctx: Context) !Result {
     const cwd = try std.fs.cwd().realpathAlloc(ctx.allocator, ".");
 
-    try ctx.writer.print("{s}\n", .{cwd});
+    try ctx.writer.print("{s}", .{cwd});
 
     return Result.cont();
 }
 
-fn handleCdCommand(ctx: Context, args: []const u8) !Result {
-    const dir_path = if (mem.eql(u8, args, "~"))
+fn handleCdCommand(ctx: Context, args: []const []const u8) !?Result {
+    const arg = args[0];
+    const dir_path = if (mem.eql(u8, arg, "~"))
         ctx.env_map.get("HOME") orelse ""
     else
-        args;
+        arg;
 
     const dir = std.fs.cwd().openDir(dir_path, .{}) catch {
-        try ctx.writer.print("cd: {s}: No such file or directory\n", .{args});
+        try ctx.writer.print("cd: {s}: No such file or directory", .{arg});
         return Result.cont();
     };
 
@@ -171,10 +190,14 @@ fn handleCdCommand(ctx: Context, args: []const u8) !Result {
     return Result.cont();
 }
 
-fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
-    const cmd, const args = util.splitAtNext(input, " ");
+fn tryHandleBuiltin(ctx: Context, input: []const []const u8) !?Result {
+    if (input.len < 1) {
+        return null;
+    }
 
-    if (resolveBuiltinSymbol(cmd)) |builtin| {
+    if (resolveBuiltinSymbol(input[0])) |builtin| {
+        const args = input[1..];
+
         return switch (builtin.kind) {
             .exit => try handleExitCommand(args),
             .echo => try handleEchoCommand(ctx, args),
@@ -187,25 +210,17 @@ fn tryHandleBuiltin(ctx: Context, input: []const u8) !?Result {
     }
 }
 
-fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
-    const run_prefix = "";
-
-    if (!mem.startsWith(u8, input, run_prefix)) {
+fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
+    if (input.len < 1) {
         return null;
     }
 
-    var token_iter = util.tokenize(ctx.allocator, input);
-    var cmd = try token_iter.next() orelse return null;
-    const process_name = cmd[run_prefix.len..];
-
-    if (resolveFileSymbol(ctx, process_name)) |file| {
+    if (resolveFileSymbol(ctx, input[0])) |file| {
         var argv = std.ArrayList([]const u8).init(ctx.allocator);
         defer argv.deinit();
 
         try argv.append(file.path);
-        while (try token_iter.next()) |arg| {
-            try argv.append(arg);
-        }
+        try argv.appendSlice(input[1..]);
 
         var proc = std.process.Child.init(argv.items, ctx.allocator);
 
@@ -220,14 +235,14 @@ fn tryHandleRunProcess(ctx: Context, input: []const u8) !?Result {
     }
 }
 
-fn handleUnknown(ctx: Context, input: []const u8) !Result {
-    const cmd, _ = util.splitAtNext(input, " ");
+fn handleUnknown(ctx: Context, input: []const []const u8) !Result {
+    const cmd = if (input.len > 0) input[0] else "";
 
-    try ctx.writer.print("{s}: command not found\n", .{cmd});
+    try ctx.writer.print("{s}: command not found", .{cmd});
     return Result.cont();
 }
 
-fn handleInput(ctx: Context, input: []const u8) !Result {
+fn handleInput(ctx: Context, input: []const []const u8) !Result {
     if (try tryHandleBuiltin(ctx, input)) |result| {
         return result;
     } else if (try tryHandleRunProcess(ctx, input)) |result| {
@@ -251,32 +266,35 @@ pub fn main() !u8 {
     var env_map = try std.process.getEnvMap(gpa.allocator());
     defer env_map.deinit();
 
-    var out = std.io.bufferedWriter(stdout);
-    var ctx = Context{ .allocator = gpa.allocator(), .env_map = env_map, .writer = out.writer() };
     var buffer: [4096]u8 = undefined;
 
-    try out.writer().print("$ ", .{});
-    try out.flush();
-
     while (true) {
+        try stdout.writeAll("$ ");
+
+        var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+        defer arena.deinit();
+
         @memset(&buffer, 0);
-        const user_input = nextInput(stdin, &buffer);
+        const user_input = try nextInput(arena.allocator(), stdin, &buffer);
 
-        if (user_input) |command| {
-            var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-            defer arena.deinit();
+        if (user_input) |input| {
+            var out = std.io.bufferedWriter(stdout);
 
-            ctx.allocator = arena.allocator();
+            const ctx = Context{
+                .allocator = arena.allocator(),
+                .env_map = env_map,
+                .writer = out.writer(),
+            };
 
-            const result = try handleInput(ctx, command);
+            const result = try handleInput(ctx, input.tokens);
+            try out.flush();
 
             switch (result) {
                 .cont => {},
                 .exit => |code| return code,
             }
-        }
 
-        try out.writer().print("$ ", .{});
-        try out.flush();
+            try stdout.writeAll("\n");
+        }
     }
 }
