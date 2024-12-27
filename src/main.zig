@@ -262,7 +262,7 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
         try util.forward(proc.stdout.?, ctx.writer);
 
         return switch (try proc.wait()) {
-            .Exited => |code| if (code == 0) Result.cont() else Result.exit(1),
+            .Exited => Result.cont(),
             else => Result.exit(1),
         };
     } else {
