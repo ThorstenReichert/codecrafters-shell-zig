@@ -16,6 +16,7 @@ fn trace(comptime format: []const u8, args: anytype) void {
 
 const Target = union(enum) {
     stdout: void,
+    stderr: void,
     file: std.fs.File,
 
     pub fn deinit(self: *const Target) void {
@@ -29,14 +30,20 @@ const Target = union(enum) {
 };
 const Input = struct {
     tokens: []const []const u8,
-    target: Target,
+    out_target: Target,
+    err_target: Target,
 
     pub fn deinit(self: *Input) void {
-        self.target.deinit();
+        self.out_target.deinit();
+        self.err_target.deinit();
     }
 
     pub fn empty() Input {
-        return Input{ .tokens = &[0][]const u8{}, .target = .stdout };
+        return Input{
+            .tokens = &[0][]const u8{},
+            .out_target = .stdout,
+            .err_target = .stderr,
+        };
     }
 };
 const Result = union(enum) {
@@ -53,7 +60,8 @@ const Result = union(enum) {
 const Context = struct {
     allocator: std.mem.Allocator,
     env_map: std.process.EnvMap,
-    writer: std.io.BufferedWriter(4096, std.fs.File.Writer).Writer,
+    out: std.io.BufferedWriter(4096, std.fs.File.Writer).Writer,
+    err: std.io.BufferedWriter(4096, std.fs.File.Writer).Writer,
 };
 
 const BuiltinSymbolKind = enum { exit, echo, type, pwd, cd };
@@ -90,12 +98,22 @@ fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input
 
     var token_iter = util.tokenize(allocator, trimmed_line);
     var input = std.ArrayList([]const u8).init(allocator);
-    var target: ?[]const u8 = null;
+    var out_target = Target{ .stdout = {} };
+    var err_target = Target{ .stderr = {} };
     defer input.deinit();
 
     while (try token_iter.next()) |token| {
         if (mem.eql(u8, token, ">") or mem.eql(u8, token, "1>")) {
-            target = try token_iter.next();
+            if (try token_iter.next()) |file| {
+                out_target = Target{ .file = try openAppend(file) };
+            }
+            break;
+        }
+
+        if (mem.eql(u8, token, "2>")) {
+            if (try token_iter.next()) |file| {
+                err_target = Target{ .file = try openAppend(file) };
+            }
             break;
         }
 
@@ -104,10 +122,8 @@ fn nextInput(allocator: std.mem.Allocator, reader: anytype, buffer: []u8) !Input
 
     return Input{
         .tokens = try input.toOwnedSlice(),
-        .target = if (target) |file|
-            Target{ .file = try openAppend(file) }
-        else
-            Target{ .stdout = {} },
+        .out_target = out_target,
+        .err_target = err_target,
     };
 }
 
@@ -172,13 +188,13 @@ fn handleEchoCommand(ctx: Context, args: []const []const u8) !Result {
     var first = true;
 
     for (args) |arg| {
-        if (!first) try ctx.writer.print(" ", .{});
+        if (!first) try ctx.out.print(" ", .{});
         first = false;
 
-        try ctx.writer.print("{s}", .{arg});
+        try ctx.out.print("{s}", .{arg});
     }
 
-    try ctx.writer.writeAll("\n");
+    try ctx.out.writeAll("\n");
     return Result.cont();
 }
 
@@ -190,19 +206,19 @@ fn handleTypeCommand(ctx: Context, args: []const []const u8) !Result {
     const is_program = "{s} is {s}";
     const not_found = "{s}: not found";
     switch (symbol) {
-        .builtin => |builtin_symbol| try ctx.writer.print(builtin, .{builtin_symbol.name}),
-        .file => |file_symbol| try ctx.writer.print(is_program, .{ file_symbol.name, file_symbol.path }),
-        .unknown => try ctx.writer.print(not_found, .{arg}),
+        .builtin => |builtin_symbol| try ctx.out.print(builtin, .{builtin_symbol.name}),
+        .file => |file_symbol| try ctx.out.print(is_program, .{ file_symbol.name, file_symbol.path }),
+        .unknown => try ctx.out.print(not_found, .{arg}),
     }
 
-    try ctx.writer.writeAll("\n");
+    try ctx.out.writeAll("\n");
     return Result.cont();
 }
 
 fn handlePwdCommand(ctx: Context) !Result {
     const cwd = try std.fs.cwd().realpathAlloc(ctx.allocator, ".");
 
-    try ctx.writer.print("{s}\n", .{cwd});
+    try ctx.out.print("{s}\n", .{cwd});
 
     return Result.cont();
 }
@@ -215,7 +231,7 @@ fn handleCdCommand(ctx: Context, args: []const []const u8) !?Result {
         arg;
 
     const dir = std.fs.cwd().openDir(dir_path, .{}) catch {
-        try ctx.writer.print("cd: {s}: No such file or directory\n", .{arg});
+        try ctx.out.print("cd: {s}: No such file or directory\n", .{arg});
         return Result.cont();
     };
 
@@ -257,9 +273,11 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
 
         var proc = std.process.Child.init(argv.items, ctx.allocator);
         proc.stdout_behavior = .Pipe;
+        proc.stderr_behavior = .Pipe;
 
         try proc.spawn();
-        try util.forward(proc.stdout.?, ctx.writer);
+        try util.forward(proc.stderr.?, ctx.err);
+        try util.forward(proc.stdout.?, ctx.out);
         _ = try proc.wait();
 
         return Result.cont();
@@ -271,7 +289,7 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
 fn handleUnknown(ctx: Context, input: []const []const u8) !Result {
     const cmd = if (input.len > 0) input[0] else "";
 
-    try ctx.writer.print("{s}: command not found\n", .{cmd});
+    try ctx.out.print("{s}: command not found\n", .{cmd});
     return Result.cont();
 }
 
@@ -283,6 +301,14 @@ fn handleInput(ctx: Context, input: []const []const u8) !Result {
     } else {
         return try handleUnknown(ctx, input);
     }
+}
+
+fn createWriter(target: Target) std.io.BufferedWriter(4096, std.fs.File.Writer) {
+    return switch (target) {
+        .stdout => std.io.bufferedWriter(std.io.getStdOut().writer()),
+        .stderr => std.io.bufferedWriter(std.io.getStdErr().writer()),
+        .file => |file| std.io.bufferedWriter(file.writer()),
+    };
 }
 
 pub fn main() !u8 {
@@ -311,19 +337,19 @@ pub fn main() !u8 {
         var input = try nextInput(arena.allocator(), stdin, &buffer);
         defer input.deinit();
 
-        var out = switch (input.target) {
-            .stdout => std.io.bufferedWriter(stdout),
-            .file => |file| std.io.bufferedWriter(file.writer()),
-        };
+        var out = createWriter(input.out_target);
+        var err = createWriter(input.err_target);
 
         const ctx = Context{
             .allocator = arena.allocator(),
             .env_map = env_map,
-            .writer = out.writer(),
+            .out = out.writer(),
+            .err = err.writer(),
         };
 
         const result = try handleInput(ctx, input.tokens);
         try out.flush();
+        try err.flush();
 
         switch (result) {
             .cont => {},
