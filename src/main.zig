@@ -260,11 +260,9 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
 
         try proc.spawn();
         try util.forward(proc.stdout.?, ctx.writer);
+        _ = try proc.wait();
 
-        return switch (try proc.wait()) {
-            .Exited => Result.cont(),
-            else => Result.exit(1),
-        };
+        return Result.cont();
     } else {
         return null;
     }
