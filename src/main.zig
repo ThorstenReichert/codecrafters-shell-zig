@@ -175,9 +175,10 @@ fn handleEchoCommand(ctx: Context, args: []const []const u8) !Result {
         if (!first) try ctx.writer.print(" ", .{});
         first = false;
 
-        try ctx.writer.print("{s}\n", .{arg});
+        try ctx.writer.print("{s}", .{arg});
     }
 
+    try ctx.writer.writeAll("\n");
     return Result.cont();
 }
 
