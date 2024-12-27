@@ -175,7 +175,7 @@ fn handleEchoCommand(ctx: Context, args: []const []const u8) !Result {
         if (!first) try ctx.writer.print(" ", .{});
         first = false;
 
-        try ctx.writer.print("{s}", .{arg});
+        try ctx.writer.print("{s}\n", .{arg});
     }
 
     return Result.cont();
@@ -194,13 +194,14 @@ fn handleTypeCommand(ctx: Context, args: []const []const u8) !Result {
         .unknown => try ctx.writer.print(not_found, .{arg}),
     }
 
+    try ctx.writer.writeAll("\n");
     return Result.cont();
 }
 
 fn handlePwdCommand(ctx: Context) !Result {
     const cwd = try std.fs.cwd().realpathAlloc(ctx.allocator, ".");
 
-    try ctx.writer.print("{s}", .{cwd});
+    try ctx.writer.print("{s}\n", .{cwd});
 
     return Result.cont();
 }
@@ -213,7 +214,7 @@ fn handleCdCommand(ctx: Context, args: []const []const u8) !?Result {
         arg;
 
     const dir = std.fs.cwd().openDir(dir_path, .{}) catch {
-        try ctx.writer.print("cd: {s}: No such file or directory", .{arg});
+        try ctx.writer.print("cd: {s}: No such file or directory\n", .{arg});
         return Result.cont();
     };
 
@@ -271,7 +272,7 @@ fn tryHandleRunProcess(ctx: Context, input: []const []const u8) !?Result {
 fn handleUnknown(ctx: Context, input: []const []const u8) !Result {
     const cmd = if (input.len > 0) input[0] else "";
 
-    try ctx.writer.print("{s}: command not found", .{cmd});
+    try ctx.writer.print("{s}: command not found\n", .{cmd});
     return Result.cont();
 }
 
@@ -328,11 +329,6 @@ pub fn main() !u8 {
         switch (result) {
             .cont => {},
             .exit => |code| return code,
-        }
-
-        switch (input.target) {
-            .stdout => try stdout.writeAll("\n"),
-            else => {},
         }
     }
 }
